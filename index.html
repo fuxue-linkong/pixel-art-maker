@@ -142,8 +142,12 @@
   #output {
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    max-width: 100%; max-height: 320px;
     display: block;
+    aspect-ratio: 1 / 1;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 60vh;
   }
 
   /* 控件 */
@@ -275,7 +279,7 @@
 
       <div class="ctrl">
         <label>分辨率 <span class="val"><span id="resVal">24</span> × <span id="resVal2">24</span></span></label>
-        <input type="range" id="resolution" min="4" max="128" value="24" step="1">
+        <input type="number" id="resolution" min="2" max="256" value="24" step="1" style="width:100%; background:var(--panel2); color:var(--text); border:1px solid var(--border2); border-radius:8px; padding:8px 10px; font:inherit; font-size:13px;">
       </div>
 
       <div class="ctrl">
@@ -491,10 +495,10 @@
       drawGrid(outCtx, N);
     }
 
-    // 5. 显示放大
+    // 5. 显示放大(只设一个维度,CSS aspect-ratio 保持正方形)
     const dispScale = state.outScale;
     output.style.width = (N * dispScale) + 'px';
-    output.style.height = (N * dispScale) + 'px';
+    output.style.height = 'auto';
   }
 
   // ===== Box average sampling =====
