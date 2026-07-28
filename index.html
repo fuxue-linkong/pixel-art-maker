@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图片转像素画</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1220;
+    --panel: #181b2c;
+    --panel2: #11131f;
+    --border: #2a2f48;
+    --border2: #353b5a;
+    --text: #e6e8f0;
+    --muted: #8a90a8;
+    --dim: #6a7090;
+    --accent: #6b7cff;
+    --accent2: #5868ff;
+  }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  header { margin-bottom: 20px; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 20px;
+  }
+  @media (max-width: 880px) {
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+  }
+  .card h2 {
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+
+  /* 上传/取景区 */
+  .viewport {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background:
+      linear-gradient(45deg, #1c2034 25%, transparent 25%),
+      linear-gradient(-45deg, #1c2034 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #1c2034 75%),
+      linear-gradient(-45deg, transparent 75%, #1c2034 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    background-color: #14162a;
+    border-radius: 10px;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+  .viewport canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .viewport .hint-text {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center; color: var(--muted);
+    pointer-events: none;
+    padding: 24px;
+  }
+  .viewport .hint-text strong { color: var(--text); font-size: 16px; margin-bottom: 6px; }
+  .viewport .hint-text small { color: var(--dim); font-size: 12px; }
+
+  .drop-zone {
+    position: absolute; inset: 0;
+    cursor: pointer;
+    display: flex;
+  }
+
+  /* 选区框 */
+  .crop-box {
+    position: absolute;
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 0 9999px rgba(15, 18, 32, .55);
+    pointer-events: none;
+  }
+  .crop-box::before, .crop-box::after,
+  .crop-box > i::before, .crop-box > i::after {
+    content: ""; position: absolute; background: var(--accent);
+    width: 14px; height: 2px;
+  }
+  .crop-box::before { top: -2px; left: -2px; }
+  .crop-box::after  { top: -2px; right: -2px; }
+  .crop-box > i::before { bottom: -2px; left: -2px; }
+  .crop-box > i::after  { bottom: -2px; right: -2px; }
+
+  .viewport-tools {
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin-top: 12px; align-items: center;
+  }
+  .tool-btn {
+    background: var(--panel2);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font: inherit; font-size: 13px;
+    cursor: pointer; transition: .15s;
+  }
+  .tool-btn:hover { background: #232842; border-color: var(--accent); }
+  .tool-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* 输出区 */
+  .out-wrap {
+    background:
+      linear-gradient(45deg, #1c2034 25%, transparent 25%),
+      linear-gradient(-45deg, #1c2034 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #1c2034 75%),
+      linear-gradient(-45deg, transparent 75%, #1c2034 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+    background-color: #14162a;
+    border-radius: 10px;
+    padding: 16px;
+    display: flex; align-items: center; justify-content: center;
+    min-height: 260px;
+  }
+  #output {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    max-width: 100%; max-height: 320px;
+    display: block;
+  }
+
+  /* 控件 */
+  .ctrl { margin-bottom: 14px; }
+  .ctrl label {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 13px; color: var(--muted); margin-bottom: 6px;
+  }
+  .ctrl label .val { color: var(--text); font-variant-numeric: tabular-nums; }
+  .ctrl input[type=range] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .ctrl select {
+    width: 100%;
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit; font-size: 13px;
+    cursor: pointer;
+  }
+  .ctrl input[type=number] {
+    width: 70px;
+    background: var(--panel2);
+    color: var(--text);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font: inherit; font-size: 13px;
+  }
+
+  .switch {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0;
+  }
+  .switch span { font-size: 13px; color: var(--text); }
+  .switch input { display: none; }
+  .switch .track {
+    width: 36px; height: 20px;
+    background: var(--border2);
+    border-radius: 10px;
+    position: relative;
+    transition: .2s;
+    cursor: pointer;
+  }
+  .switch .track::after {
+    content: ""; position: absolute;
+    top: 2px; left: 2px;
+    width: 16px; height: 16px;
+    background: #fff; border-radius: 50%;
+    transition: .2s;
+  }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { left: 18px; }
+
+  .btn-primary {
+    width: 100%;
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    border-radius: 8px;
+    padding: 10px;
+    font: inherit; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: .15s;
+    margin-top: 4px;
+  }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+
+  .help { font-size: 12px; color: var(--dim); margin-top: 8px; line-height: 1.6; }
+  .help kbd {
+    background: var(--panel2);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    color: var(--text);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>图片转像素画</h1>
+    <p class="sub">上传图片,拖动与缩放选取,多种算法生成像素艺术</p>
+  </header>
+
+  <div class="grid">
+    <!-- 左:取景 + 输出 -->
+    <div style="display:flex; flex-direction:column; gap:20px;">
+      <div class="card">
+        <h2>① 选取区域</h2>
+        <div class="viewport" id="viewport">
+          <canvas id="vpCanvas"></canvas>
+          <div class="crop-box" id="cropBox" hidden><i></i></div>
+          <div class="hint-text" id="hintText">
+            <strong>点击或拖拽图片到此处</strong>
+            <small>支持 PNG / JPG / WEBP / GIF</small>
+          </div>
+          <input type="file" id="file" accept="image/*" hidden>
+        </div>
+        <div class="viewport-tools">
+          <button class="tool-btn" id="btnUpload">选择图片</button>
+          <button class="tool-btn" id="btnZoomIn" disabled>放大 ＋</button>
+          <button class="tool-btn" id="btnZoomOut" disabled>缩小 －</button>
+          <button class="tool-btn" id="btnFit" disabled>适应</button>
+          <button class="tool-btn" id="btnReset" disabled>重置</button>
+          <span style="flex:1"></span>
+          <span style="font-size:12px; color:var(--dim);">滚轮缩放 · 拖动移动</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>② 像素画结果</h2>
+        <div class="out-wrap">
+          <canvas id="output" width="24" height="24"></canvas>
+        </div>
+        <div class="help">
+          滚轮缩放选取区 · 鼠标拖动图片 · 实时预览输出
+        </div>
+      </div>
+    </div>
+
+    <!-- 右:参数 -->
+    <div class="card">
+      <h2>参数设置</h2>
+
+      <div class="ctrl">
+        <label>分辨率 <span class="val"><span id="resVal">24</span> × <span id="resVal2">24</span></span></label>
+        <input type="range" id="resolution" min="4" max="128" value="24" step="1">
+      </div>
+
+      <div class="ctrl">
+        <label>算法</label>
+        <select id="algorithm">
+          <option value="average">平均色 (Average)</option>
+          <option value="nearest">最近邻 (Nearest)</option>
+          <option value="quantize">量化 (Quantize 16色)</option>
+          <option value="dither">抖动 (Floyd-Steinberg)</option>
+        </select>
+      </div>
+
+      <div class="ctrl">
+        <label>锐化 <span class="val"><span id="sharpVal">0</span>%</span></label>
+        <input type="range" id="sharpen" min="0" max="100" value="0" step="1">
+      </div>
+
+      <div class="ctrl">
+        <label>选区大小 <span class="val"><span id="cropVal">80</span>%</span></label>
+        <input type="range" id="cropSize" min="20" max="100" value="80" step="1">
+      </div>
+
+      <div class="ctrl">
+        <label>输出放大倍数</label>
+        <select id="scale">
+          <option value="8">8×</option>
+          <option value="12" selected>12×</option>
+          <option value="16">16×</option>
+          <option value="24">24×</option>
+          <option value="32">32×</option>
+        </select>
+      </div>
+
+      <label class="switch">
+        <span>显示网格</span>
+        <input type="checkbox" id="gridToggle">
+        <span class="track"></span>
+      </label>
+
+      <button class="btn-primary" id="btnDownload" disabled>下载 PNG</button>
+
+      <p class="help">
+        <kbd>滚轮</kbd> 缩放 · <kbd>拖动</kbd> 移动图片 · <kbd>点击</kbd> 上传图片
+      </p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ===== DOM =====
+  const viewport = document.getElementById('viewport');
+  const vpCanvas = document.getElementById('vpCanvas');
+  const vpCtx = vpCanvas.getContext('2d');
+  const cropBox = document.getElementById('cropBox');
+  const hintText = document.getElementById('hintText');
+  const fileInput = document.getElementById('file');
+  const output = document.getElementById('output');
+  const outCtx = output.getContext('2d');
+
+  const btnUpload = document.getElementById('btnUpload');
+  const btnZoomIn = document.getElementById('btnZoomIn');
+  const btnZoomOut = document.getElementById('btnZoomOut');
+  const btnFit = document.getElementById('btnFit');
+  const btnReset = document.getElementById('btnReset');
+  const btnDownload = document.getElementById('btnDownload');
+
+  const resInput = document.getElementById('resolution');
+  const resVal = document.getElementById('resVal');
+  const resVal2 = document.getElementById('resVal2');
+  const algoSel = document.getElementById('algorithm');
+  const sharpInput = document.getElementById('sharpen');
+  const sharpVal = document.getElementById('sharpVal');
+  const cropInput = document.getElementById('cropSize');
+  const cropValEl = document.getElementById('cropVal');
+  const scaleSel = document.getElementById('scale');
+  const gridToggle = document.getElementById('gridToggle');
+
+  // ===== State =====
+  const state = {
+    img: null,            // HTMLImageElement
+    imgW: 0, imgH: 0,
+    // 图片在 viewport 中的变换(以 viewport 像素为单位,中心点为锚)
+    tx: 0, ty: 0,         // 平移(屏幕像素,相对 viewport 中心)
+    scale: 1,             // 缩放
+    fitScale: 1,          // 适应缩放
+    vpW: 0, vpH: 0,       // viewport 显示尺寸(像素)
+    cropRatio: 0.8,       // 选区占 viewport 短边的比例
+    resolution: 24,
+    algorithm: 'average',
+    sharpen: 0,
+    outScale: 12,
+    showGrid: false,
+  };
+
+  // ===== Resize viewport canvas =====
+  function resizeViewport() {
+    const rect = viewport.getBoundingClientRect();
+    state.vpW = rect.width;
+    state.vpH = rect.height;
+    const dpr = window.devicePixelRatio || 1;
+    vpCanvas.width = state.vpW * dpr;
+    vpCanvas.height = state.vpH * dpr;
+    vpCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawViewport();
+    updateCropBox();
+  }
+
+  // ===== Compute fit scale =====
+  function computeFit() {
+    if (!state.img) return 1;
+    const s = Math.min(state.vpW / state.imgW, state.vpH / state.imgH);
+    return s * 0.92;
+  }
+
+  // ===== Draw viewport =====
+  function drawViewport() {
+    vpCtx.clearRect(0, 0, state.vpW, state.vpH);
+    if (!state.img) return;
+    const cx = state.vpW / 2 + state.tx;
+    const cy = state.vpH / 2 + state.ty;
+    const w = state.imgW * state.scale;
+    const h = state.imgH * state.scale;
+    vpCtx.imageSmoothingEnabled = true;
+    vpCtx.drawImage(state.img, cx - w / 2, cy - h / 2, w, h);
+  }
+
+  // ===== Crop box (in viewport px) =====
+  function getCropRect() {
+    const side = Math.min(state.vpW, state.vpH) * state.cropRatio;
+    const x = (state.vpW - side) / 2;
+    const y = (state.vpH - side) / 2;
+    return { x, y, side };
+  }
+  function updateCropBox() {
+    if (!state.img) { cropBox.hidden = true; return; }
+    cropBox.hidden = false;
+    const r = getCropRect();
+    cropBox.style.left = r.x + 'px';
+    cropBox.style.top = r.y + 'px';
+    cropBox.style.width = r.side + 'px';
+    cropBox.style.height = r.side + 'px';
+  }
+
+  // ===== Render pixel art =====
+  function renderPixelArt() {
+    if (!state.img) return;
+
+    const N = state.resolution;
+    output.width = N;
+    output.height = N;
+
+    // 1. 在临时 canvas 上把选区内的图片绘制到 N×N
+    const tmp = document.createElement('canvas');
+    tmp.width = N; tmp.height = N;
+    const tctx = tmp.getContext('2d');
+    tctx.imageSmoothingEnabled = true;
+
+    // 计算选区在图片原图坐标系中的矩形
+    const crop = getCropRect();
+    const cx = state.vpW / 2 + state.tx;
+    const cy = state.vpH / 2 + state.ty;
+    const w = state.imgW * state.scale;
+    const h = state.imgH * state.scale;
+    // 图片左上角在 viewport 中:
+    const imgLeftVp = cx - w / 2;
+    const imgTopVp = cy - h / 2;
+    // 选区相对图片左上角的 viewport 偏移 -> 除以 scale 得原图坐标
+    const sx = (crop.x - imgLeftVp) / state.scale;
+    const sy = (crop.y - imgTopVp) / state.scale;
+    const sSize = crop.side / state.scale;
+
+    // 裁剪到原图边界内
+    const sxClamp = Math.max(0, Math.min(state.imgW - 1, sx));
+    const syClamp = Math.max(0, Math.min(state.imgH - 1, sy));
+    const sW = Math.max(1, Math.min(state.imgW - sxClamp, sSize));
+    const sH = Math.max(1, Math.min(state.imgH - syClamp, sSize));
+
+    tctx.drawImage(state.img, sxClamp, syClamp, sW, sH, 0, 0, N, N);
+
+    // 2. 算法处理
+    const algo = state.algorithm;
+    let imgData = tctx.getImageData(0, 0, N, N);
+
+    if (algo === 'nearest') {
+      // 重新采样:对每个目标像素从源图取单点
+      const src = document.createElement('canvas');
+      src.width = N; src.height = N;
+      const sctx = src.getContext('2d');
+      sctx.imageSmoothingEnabled = false;
+      sctx.drawImage(state.img, sxClamp, syClamp, sW, sH, 0, 0, N, N);
+      imgData = sctx.getImageData(0, 0, N, N);
+    } else if (algo === 'average') {
+      // drawImage with smoothing 已经做了双线性插值,近似平均
+      // 再做一次 box average 以增强"平均"感
+      imgData = boxAverage(state.img, sxClamp, syClamp, sW, sH, N);
+    } else if (algo === 'quantize') {
+      imgData = boxAverage(state.img, sxClamp, syClamp, sW, sH, N);
+      imgData = quantize(imgData, PALETTE_16);
+    } else if (algo === 'dither') {
+      imgData = floydSteinberg(state.img, sxClamp, syClamp, sW, sH, N, PALETTE_16);
+    }
+
+    // 3. 锐化
+    if (state.sharpen > 0) {
+      imgData = sharpen(imgData, state.sharpen / 100);
+    }
+
+    outCtx.putImageData(imgData, 0, 0);
+
+    // 4. 网格
+    if (state.showGrid) {
+      drawGrid(outCtx, N);
+    }
+
+    // 5. 显示放大
+    const dispScale = state.outScale;
+    output.style.width = (N * dispScale) + 'px';
+    output.style.height = (N * dispScale) + 'px';
+  }
+
+  // ===== Box average sampling =====
+  function boxAverage(img, sx, sy, sw, sh, N) {
+    // 用临时 canvas 把源区域画到 NxN(双线性),再读出
+    const c = document.createElement('canvas');
+    c.width = N; c.height = N;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, N, N);
+    return ctx.getImageData(0, 0, N, N);
+  }
+
+  // ===== Palettes =====
+  const PALETTE_16 = [
+    [0,0,0],[255,255,255],[192,192,192],[128,128,128],
+    [255,0,0],[255,128,0],[255,255,0],[128,255,0],
+    [0,255,0],[0,255,128],[0,255,255],[0,128,255],
+    [0,0,255],[128,0,255],[255,0,255],[255,0,128],
+  ];
+  function nearestColor(r, g, b, palette) {
+    let best = palette[0], bestD = Infinity;
+    for (let i = 0; i < palette.length; i++) {
+      const p = palette[i];
+      const dr = r - p[0], dg = g - p[1], db = b - p[2];
+      const d = dr*dr + dg*dg + db*db;
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  }
+  function quantize(imgData, palette) {
+    const d = imgData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const c = nearestColor(d[i], d[i+1], d[i+2], palette);
+      d[i] = c[0]; d[i+1] = c[1]; d[i+2] = c[2];
+    }
+    return imgData;
+  }
+  function floydSteinberg(img, sx, sy, sw, sh, N, palette) {
+    // 先把源区域画到 NxN(canvas 双线性),得到浮点 buffer
+    const c = document.createElement('canvas');
+    c.width = N; c.height = N;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, N, N);
+    const id = ctx.getImageData(0, 0, N, N);
+    const d = id.data;
+    // 浮点副本
+    const buf = new Float32Array(d.length);
+    for (let i = 0; i < d.length; i++) buf[i] = d[i];
+
+    const spread = (x, y, er, eg, eb, ea) => {
+      if (x < 0 || x >= N || y < 0 || y >= N) return;
+      const idx = (y * N + x) * 4;
+      buf[idx]   += er;
+      buf[idx+1] += eg;
+      buf[idx+2] += eb;
+      buf[idx+3] += ea;
+    };
+
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const idx = (y * N + x) * 4;
+        const r = buf[idx], g = buf[idx+1], b = buf[idx+2], a = buf[idx+3];
+        const c = nearestColor(r, g, b, palette);
+        const er = r - c[0], eg = g - c[1], eb = b - c[2];
+        d[idx] = c[0]; d[idx+1] = c[1]; d[idx+2] = c[2]; d[idx+3] = a;
+        // 误差扩散
+        spread(x+1, y,   er*7/16, eg*7/16, eb*7/16, 0);
+        spread(x-1, y+1, er*3/16, eg*3/16, eb*3/16, 0);
+        spread(x,   y+1, er*5/16, eg*5/16, eb*5/16, 0);
+        spread(x+1, y+1, er*1/16, eg*1/16, eb*1/16, 0);
+      }
+    }
+    return id;
+  }
+
+  // ===== Sharpen (convolution) =====
+  function sharpen(imgData, amount) {
+    // amount: 0..1
+    // 卷积核:中心 1+4*k,四邻 -k,k = amount
+    const k = amount;
+    const center = 1 + 4 * k;
+    const side = -k;
+    const w = imgData.width, h = imgData.height;
+    const src = imgData.data;
+    const out = new Uint8ClampedArray(src.length);
+    const idx = (x, y) => (y * w + x) * 4;
+    const clamp = (v) => v < 0 ? 0 : v > 255 ? 255 : v;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = idx(x, y);
+        let r = src[i] * center, g = src[i+1] * center, b = src[i+2] * center, a = src[i+3];
+        const neighbors = [
+          [x-1,y],[x+1,y],[x,y-1],[x,y+1]
+        ];
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          const j = idx(nx, ny);
+          r += src[j] * side;
+          g += src[j+1] * side;
+          b += src[j+2] * side;
+        }
+        out[i]   = clamp(r);
+        out[i+1] = clamp(g);
+        out[i+2] = clamp(b);
+        out[i+3] = a;
+      }
+    }
+    return new ImageData(out, w, h);
+  }
+
+  // ===== Grid =====
+  function drawGrid(ctx, N) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1 / state.outScale; // 在 NxN 画布上画细线,显示时正好 1px
+    for (let i = 1; i < N; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i, 0); ctx.lineTo(i, N);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, i); ctx.lineTo(N, i);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ===== Load image =====
+  function handleFile(f) {
+    if (!f || !f.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(f);
+    const img = new Image();
+    img.onload = () => {
+      state.img = img;
+      state.imgW = img.naturalWidth;
+      state.imgH = img.naturalHeight;
+      state.fitScale = computeFit();
+      state.scale = state.fitScale;
+      state.tx = 0; state.ty = 0;
+      hintText.style.display = 'none';
+      [btnZoomIn, btnZoomOut, btnFit, btnReset, btnDownload].forEach(b => b.disabled = false);
+      drawViewport();
+      updateCropBox();
+      renderPixelArt();
+    };
+    img.src = url;
+  }
+
+  // ===== Events =====
+  btnUpload.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+  // 拖拽上传 + 点击上传
+  viewport.addEventListener('click', (e) => {
+    if (!state.img) fileInput.click();
+  });
+  ['dragover','dragenter'].forEach(ev =>
+    viewport.addEventListener(ev, e => { e.preventDefault(); })
+  );
+  viewport.addEventListener('drop', e => {
+    e.preventDefault();
+    handleFile(e.dataTransfer.files[0]);
+  });
+
+  // 拖动移动
+  let dragging = false, lastX = 0, lastY = 0;
+  viewport.addEventListener('pointerdown', e => {
+    if (!state.img) return;
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    viewport.setPointerCapture(e.pointerId);
+  });
+  viewport.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    state.tx += e.clientX - lastX;
+    state.ty += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    drawViewport();
+    updateCropBox();
+    renderPixelArt();
+  });
+  viewport.addEventListener('pointerup', e => { dragging = false; });
+  viewport.addEventListener('pointercancel', e => { dragging = false; });
+
+  // 滚轮缩放
+  viewport.addEventListener('wheel', e => {
+    if (!state.img) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.1 : 1/1.1;
+    state.scale = Math.max(0.05, Math.min(50, state.scale * factor));
+    drawViewport();
+    updateCropBox();
+    renderPixelArt();
+  }, { passive: false });
+
+  // 工具按钮
+  btnZoomIn.addEventListener('click', () => { state.scale *= 1.2; drawViewport(); updateCropBox(); renderPixelArt(); });
+  btnZoomOut.addEventListener('click', () => { state.scale /= 1.2; drawViewport(); updateCropBox(); renderPixelArt(); });
+  btnFit.addEventListener('click', () => {
+    state.scale = state.fitScale;
+    state.tx = 0; state.ty = 0;
+    drawViewport(); updateCropBox(); renderPixelArt();
+  });
+  btnReset.addEventListener('click', () => {
+    state.scale = state.fitScale;
+    state.tx = 0; state.ty = 0;
+    drawViewport(); updateCropBox(); renderPixelArt();
+  });
+
+  // 参数
+  resInput.addEventListener('input', () => {
+    state.resolution = parseInt(resInput.value);
+    resVal.textContent = state.resolution;
+    resVal2.textContent = state.resolution;
+    renderPixelArt();
+  });
+  algoSel.addEventListener('change', renderPixelArt);
+  sharpInput.addEventListener('input', () => {
+    state.sharpen = parseInt(sharpInput.value);
+    sharpVal.textContent = state.sharpen;
+    renderPixelArt();
+  });
+  cropInput.addEventListener('input', () => {
+    state.cropRatio = parseInt(cropInput.value) / 100;
+    cropValEl.textContent = cropInput.value;
+    updateCropBox();
+    renderPixelArt();
+  });
+  scaleSel.addEventListener('change', () => {
+    state.outScale = parseInt(scaleSel.value);
+    renderPixelArt();
+  });
+  gridToggle.addEventListener('change', () => {
+    state.showGrid = gridToggle.checked;
+    renderPixelArt();
+  });
+
+  // 下载
+  btnDownload.addEventListener('click', () => {
+    if (!state.img) return;
+    const N = state.resolution;
+    const scale = state.outScale;
+    const big = document.createElement('canvas');
+    big.width = N * scale;
+    big.height = N * scale;
+    const bctx = big.getContext('2d');
+    bctx.imageSmoothingEnabled = false;
+    bctx.drawImage(output, 0, 0, big.width, big.height);
+    const a = document.createElement('a');
+    a.download = `pixel-${N}x${N}.png`;
+    a.href = big.toDataURL('image/png');
+    a.click();
+  });
+
+  // resize
+  window.addEventListener('resize', () => {
+    resizeViewport();
+    if (state.img) renderPixelArt();
+  });
+
+  // init
+  resizeViewport();
+})();
+</script>
+</body>
+</html>
