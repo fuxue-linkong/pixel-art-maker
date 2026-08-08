@@ -532,6 +532,7 @@
       if (state.showGrid) {
         drawGrid(outCtx, N);
       }
+      drawCrosshair(outCtx, N);
       output.style.width = (N * dispScale) + 'px';
       output.style.height = 'auto';
       output.style.display = 'block';
@@ -674,6 +675,13 @@
       cell.style.color = lum > 140 ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.75)';
       arkGrid.appendChild(cell);
     }
+    // 天蓝色中轴线十字(DOM 网格模式)
+    const mid = Math.floor(N / 2);
+    const cells = arkGrid.children;
+    for (let i = 0; i < N; i++) {
+      cells[mid * N + i].style.borderTop = '1px solid rgba(135,206,235,0.8)';
+      cells[i * N + mid].style.borderLeft = '1px solid rgba(135,206,235,0.8)';
+    }
   }
   function quantize(imgData, palette) {
     const d = imgData.data;
@@ -758,7 +766,7 @@
     return new ImageData(out, w, h);
   }
 
-  // ===== Grid =====
+  // ===== Grid & Crosshair =====
   function drawGrid(ctx, N) {
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
@@ -771,6 +779,25 @@
       ctx.moveTo(0, i); ctx.lineTo(N, i);
       ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  // 天蓝色中轴线十字,帮助定位画布中心
+  function drawCrosshair(ctx, N) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(135,206,235,0.8)';
+    ctx.lineWidth = 1;
+    const mid = Math.floor(N / 2);
+    // 水平中线
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(N, mid);
+    ctx.stroke();
+    // 垂直中线
+    ctx.beginPath();
+    ctx.moveTo(mid, 0);
+    ctx.lineTo(mid, N);
+    ctx.stroke();
     ctx.restore();
   }
 
