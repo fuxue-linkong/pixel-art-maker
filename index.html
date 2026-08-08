@@ -150,6 +150,24 @@
     max-height: 60vh;
   }
 
+  .ark-grid {
+    display: grid;
+    gap: 0;
+    image-rendering: pixelated;
+    max-width: 100%;
+    max-height: 60vh;
+    overflow: auto;
+  }
+  .ark-grid .cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    line-height: 1;
+    user-select: none;
+    overflow: hidden;
+  }
+
   /* 控件 */
   .ctrl { margin-bottom: 14px; }
   .ctrl label {
@@ -266,6 +284,7 @@
         <h2>② 像素画结果</h2>
         <div class="out-wrap">
           <canvas id="output" width="24" height="24"></canvas>
+          <div id="arkGrid" class="ark-grid" style="display:none;"></div>
         </div>
         <div class="help">
           滚轮缩放选取区 · 鼠标拖动图片 · 实时预览输出
@@ -319,6 +338,12 @@
         <span class="track"></span>
       </label>
 
+      <label class="switch">
+        <span>明日方舟画板</span>
+        <input type="checkbox" id="arkToggle">
+        <span class="track"></span>
+      </label>
+
       <button class="btn-primary" id="btnDownload" disabled>下载 PNG</button>
 
       <p class="help">
@@ -357,6 +382,8 @@
   const cropValEl = document.getElementById('cropVal');
   const scaleSel = document.getElementById('scale');
   const gridToggle = document.getElementById('gridToggle');
+  const arkToggle = document.getElementById('arkToggle');
+  const arkGrid = document.getElementById('arkGrid');
 
   // ===== State =====
   const state = {
@@ -373,6 +400,7 @@
     sharpen: 0,
     outScale: 12,
     showGrid: false,
+    arkMode: false,
   };
 
   // ===== Resize viewport canvas =====
@@ -488,17 +516,27 @@
       imgData = sharpen(imgData, state.sharpen / 100);
     }
 
-    outCtx.putImageData(imgData, 0, 0);
-
-    // 4. 网格
-    if (state.showGrid) {
-      drawGrid(outCtx, N);
-    }
-
-    // 5. 显示放大(只设一个维度,CSS aspect-ratio 保持正方形)
+    // 4. 输出:普通 Canvas 模式 vs 明日方舟 DOM 网格模式
     const dispScale = state.outScale;
-    output.style.width = (N * dispScale) + 'px';
-    output.style.height = 'auto';
+
+    if (state.arkMode) {
+      // 量化到明日方舟调色板
+      const result = arknightsQuantize(imgData);
+      outCtx.putImageData(result.imgData, 0, 0);
+      // 显示 DOM 网格(代号文字)
+      renderArkGrid(result.imgData, result.codes, N);
+      output.style.display = 'none';
+      arkGrid.style.display = 'grid';
+    } else {
+      outCtx.putImageData(imgData, 0, 0);
+      if (state.showGrid) {
+        drawGrid(outCtx, N);
+      }
+      output.style.width = (N * dispScale) + 'px';
+      output.style.height = 'auto';
+      output.style.display = 'block';
+      arkGrid.style.display = 'none';
+    }
   }
 
   // ===== Box average sampling =====
@@ -528,6 +566,113 @@
       if (d < bestD) { bestD = d; best = p; }
     }
     return best;
+  }
+
+  // ===== Arknights palette from yanse.txt =====
+  const ARKNIGHTS_RAW = `11#212121
+12#B4B4B4
+13#EAE7DE
+14#FFFFFF
+21#D32F36
+22#9D0A00
+23#D60B4A
+24#E6968D
+31#FF9875
+32#F7D0BF
+33#FCEFE9
+34#FCF6E8
+41#DCD2C8
+42#E2CEAB
+43#D56422
+44#D48C42
+51#F29900
+52#F8C933
+53#FCE599
+54#B3B47A
+61#C1DA72
+62#6C6E00
+63#B19156
+64#A98F74
+71#AA9228
+72#3F2B12
+73#74491F
+81#2A2446
+82#394599
+83#59459C
+84#BAA3D7
+91#B6BCE0
+92#A9ACBF
+93#63ABB9
+94#B4D2DC
+101#90D8E6
+102#48AEA0
+103#B5D3C7
+104#273864`;
+  let arkPalette = parseArkPalette(ARKNIGHTS_RAW); // 默认回退值
+
+  function parseArkPalette(text) {
+    return text.trim().split('\n').map(line => {
+      const [code, hex] = line.split('#');
+      const r = parseInt(hex.slice(0,2), 16);
+      const g = parseInt(hex.slice(2,4), 16);
+      const b = parseInt(hex.slice(4,6), 16);
+      return { code: code.trim(), rgb: [r, g, b] };
+    });
+  }
+
+  async function initPalette() {
+    try {
+      const resp = await fetch('yanse.txt');
+      if (!resp.ok) throw new Error('fetch failed');
+      const text = await resp.text();
+      arkPalette = parseArkPalette(text);
+    } catch {
+      // 保持硬编码回退值
+    }
+  }
+
+  // 量化到明日方舟调色板,返回 ImageData 和每个像素的代号
+  function arknightsQuantize(imgData) {
+    const palette = arkPalette.map(p => p.rgb);
+    const d = imgData.data;
+    const codes = new Array(imgData.width * imgData.height);
+    for (let i = 0; i < d.length; i += 4) {
+      let best = 0, bestD = Infinity;
+      for (let j = 0; j < palette.length; j++) {
+        const p = palette[j];
+        const dr = d[i] - p[0], dg = d[i+1] - p[1], db = d[i+2] - p[2];
+        const dist = dr*dr + dg*dg + db*db;
+        if (dist < bestD) { bestD = dist; best = j; }
+      }
+      d[i] = palette[best][0];
+      d[i+1] = palette[best][1];
+      d[i+2] = palette[best][2];
+      codes[i / 4] = arkPalette[best].code;
+    }
+    return { imgData, codes };
+  }
+
+  // 渲染 DOM 网格
+  function renderArkGrid(imgData, codes, N) {
+    const scale = state.outScale;
+    arkGrid.innerHTML = '';
+    arkGrid.style.gridTemplateColumns = `repeat(${N}, ${scale}px)`;
+    arkGrid.style.gridTemplateRows = `repeat(${N}, ${scale}px)`;
+    const fontSize = Math.max(5, Math.floor(scale * 0.5));
+    const d = imgData.data;
+    for (let i = 0; i < codes.length; i++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      const idx = i * 4;
+      const r = d[idx], g = d[idx+1], b = d[idx+2];
+      cell.style.backgroundColor = `rgb(${r},${g},${b})`;
+      cell.textContent = codes[i];
+      cell.style.fontSize = fontSize + 'px';
+      // 根据亮度选择文字颜色
+      const lum = 0.299*r + 0.587*g + 0.114*b;
+      cell.style.color = lum > 140 ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.75)';
+      arkGrid.appendChild(cell);
+    }
   }
   function quantize(imgData, palette) {
     const d = imgData.data;
@@ -737,6 +882,10 @@
     state.showGrid = gridToggle.checked;
     renderPixelArt();
   });
+  arkToggle.addEventListener('change', () => {
+    state.arkMode = arkToggle.checked;
+    renderPixelArt();
+  });
 
   // 下载
   btnDownload.addEventListener('click', () => {
@@ -748,7 +897,28 @@
     big.height = N * scale;
     const bctx = big.getContext('2d');
     bctx.imageSmoothingEnabled = false;
-    bctx.drawImage(output, 0, 0, big.width, big.height);
+
+    if (state.arkMode) {
+      // 从 DOM 网格重绘到 canvas
+      const cells = arkGrid.querySelectorAll('.cell');
+      cells.forEach((cell, i) => {
+        const row = Math.floor(i / N);
+        const col = i % N;
+        const x = col * scale, y = row * scale;
+        bctx.fillStyle = cell.style.backgroundColor;
+        bctx.fillRect(x, y, scale, scale);
+        // 绘制代号文字
+        const fontSize = Math.max(5, Math.floor(scale * 0.5));
+        bctx.font = `bold ${fontSize}px -apple-system, "Microsoft YaHei", sans-serif`;
+        bctx.textAlign = 'center';
+        bctx.textBaseline = 'middle';
+        bctx.fillStyle = cell.style.color;
+        bctx.fillText(cell.textContent, x + scale / 2, y + scale / 2);
+      });
+    } else {
+      bctx.drawImage(output, 0, 0, big.width, big.height);
+    }
+
     const a = document.createElement('a');
     a.download = `pixel-${N}x${N}.png`;
     a.href = big.toDataURL('image/png');
@@ -763,6 +933,7 @@
 
   // init
   resizeViewport();
+  initPalette();
 })();
 </script>
 </body>
