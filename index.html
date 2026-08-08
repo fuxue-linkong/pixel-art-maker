@@ -126,6 +126,7 @@
 
   /* 输出区 */
   .out-wrap {
+    position: relative;
     background:
       linear-gradient(45deg, #1c2034 25%, transparent 25%),
       linear-gradient(-45deg, #1c2034 25%, transparent 25%),
@@ -138,6 +139,33 @@
     padding: 16px;
     display: flex; align-items: center; justify-content: center;
     min-height: 260px;
+  }
+  /* 天蓝色中轴线十字 — 纯CSS视觉叠加,不影响下载的PNG */
+  .crosshair-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .crosshair-overlay::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: rgba(135,206,235,0.8);
+    transform: translateY(-0.5px);
+  }
+  .crosshair-overlay::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(135,206,235,0.8);
+    transform: translateX(-0.5px);
   }
   #output {
     image-rendering: pixelated;
@@ -285,6 +313,7 @@
         <div class="out-wrap">
           <canvas id="output" width="24" height="24"></canvas>
           <div id="arkGrid" class="ark-grid" style="display:none;"></div>
+          <div class="crosshair-overlay" id="crosshair" style="display:none;"></div>
         </div>
         <div class="help">
           滚轮缩放选取区 · 鼠标拖动图片 · 实时预览输出
@@ -384,6 +413,7 @@
   const gridToggle = document.getElementById('gridToggle');
   const arkToggle = document.getElementById('arkToggle');
   const arkGrid = document.getElementById('arkGrid');
+  const crosshair = document.getElementById('crosshair');
 
   // ===== State =====
   const state = {
@@ -460,11 +490,12 @@
     output.width = N;
     output.height = N;
 
-    // 1. 在临时 canvas 上把选区内的图片绘制到 N×N
+    // 1. 把选区内的图片缩放到 N×N（平滑用于 average/quantize/dither，最近邻用于 nearest）
     const tmp = document.createElement('canvas');
     tmp.width = N; tmp.height = N;
     const tctx = tmp.getContext('2d');
-    tctx.imageSmoothingEnabled = true;
+    const isNearest = state.algorithm === 'nearest';
+    tctx.imageSmoothingEnabled = !isNearest;
 
     // 计算选区在图片原图坐标系中的矩形
     const crop = getCropRect();
@@ -472,15 +503,12 @@
     const cy = state.vpH / 2 + state.ty;
     const w = state.imgW * state.scale;
     const h = state.imgH * state.scale;
-    // 图片左上角在 viewport 中:
     const imgLeftVp = cx - w / 2;
     const imgTopVp = cy - h / 2;
-    // 选区相对图片左上角的 viewport 偏移 -> 除以 scale 得原图坐标
     const sx = (crop.x - imgLeftVp) / state.scale;
     const sy = (crop.y - imgTopVp) / state.scale;
     const sSize = crop.side / state.scale;
 
-    // 裁剪到原图边界内
     const sxClamp = Math.max(0, Math.min(state.imgW - 1, sx));
     const syClamp = Math.max(0, Math.min(state.imgH - 1, sy));
     const sW = Math.max(1, Math.min(state.imgW - sxClamp, sSize));
@@ -488,27 +516,18 @@
 
     tctx.drawImage(state.img, sxClamp, syClamp, sW, sH, 0, 0, N, N);
 
-    // 2. 算法处理
+    // 2. 算法处理（直接复用步骤1的缩放结果，避免重复缩放）
     const algo = state.algorithm;
     let imgData = tctx.getImageData(0, 0, N, N);
 
     if (algo === 'nearest') {
-      // 重新采样:对每个目标像素从源图取单点
-      const src = document.createElement('canvas');
-      src.width = N; src.height = N;
-      const sctx = src.getContext('2d');
-      sctx.imageSmoothingEnabled = false;
-      sctx.drawImage(state.img, sxClamp, syClamp, sW, sH, 0, 0, N, N);
-      imgData = sctx.getImageData(0, 0, N, N);
+      // imageSmoothingEnabled=false 已得到最近邻结果，无需额外处理
     } else if (algo === 'average') {
-      // drawImage with smoothing 已经做了双线性插值,近似平均
-      // 再做一次 box average 以增强"平均"感
-      imgData = boxAverage(state.img, sxClamp, syClamp, sW, sH, N);
+      // imageSmoothingEnabled=true 的 drawImage 双线性插值即平均色，无需额外处理
     } else if (algo === 'quantize') {
-      imgData = boxAverage(state.img, sxClamp, syClamp, sW, sH, N);
       imgData = quantize(imgData, PALETTE_16);
     } else if (algo === 'dither') {
-      imgData = floydSteinberg(state.img, sxClamp, syClamp, sW, sH, N, PALETTE_16);
+      imgData = floydSteinberg(imgData, N, PALETTE_16);
     }
 
     // 3. 锐化
@@ -527,28 +546,18 @@
       renderArkGrid(result.imgData, result.codes, N);
       output.style.display = 'none';
       arkGrid.style.display = 'grid';
+      crosshair.style.display = '';
     } else {
       outCtx.putImageData(imgData, 0, 0);
       if (state.showGrid) {
         drawGrid(outCtx, N);
       }
-      drawCrosshair(outCtx, N);
       output.style.width = (N * dispScale) + 'px';
       output.style.height = 'auto';
       output.style.display = 'block';
       arkGrid.style.display = 'none';
+      crosshair.style.display = '';
     }
-  }
-
-  // ===== Box average sampling =====
-  function boxAverage(img, sx, sy, sw, sh, N) {
-    // 用临时 canvas 把源区域画到 NxN(双线性),再读出
-    const c = document.createElement('canvas');
-    c.width = N; c.height = N;
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, N, N);
-    return ctx.getImageData(0, 0, N, N);
   }
 
   // ===== Palettes =====
@@ -675,13 +684,6 @@
       cell.style.color = lum > 140 ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.75)';
       arkGrid.appendChild(cell);
     }
-    // 天蓝色中轴线十字(DOM 网格模式)
-    const mid = Math.floor(N / 2);
-    const cells = arkGrid.children;
-    for (let i = 0; i < N; i++) {
-      cells[mid * N + i].style.borderTop = '1px solid rgba(135,206,235,0.8)';
-      cells[i * N + mid].style.borderLeft = '1px solid rgba(135,206,235,0.8)';
-    }
   }
   function quantize(imgData, palette) {
     const d = imgData.data;
@@ -691,16 +693,9 @@
     }
     return imgData;
   }
-  function floydSteinberg(img, sx, sy, sw, sh, N, palette) {
-    // 先把源区域画到 NxN(canvas 双线性),得到浮点 buffer
-    const c = document.createElement('canvas');
-    c.width = N; c.height = N;
-    const ctx = c.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, N, N);
-    const id = ctx.getImageData(0, 0, N, N);
-    const d = id.data;
-    // 浮点副本
+  function floydSteinberg(imgData, N, palette) {
+    const d = imgData.data;
+    // 浮点副本，从已缩放的 ImageData 构建
     const buf = new Float32Array(d.length);
     for (let i = 0; i < d.length; i++) buf[i] = d[i];
 
@@ -727,7 +722,7 @@
         spread(x+1, y+1, er*1/16, eg*1/16, eb*1/16, 0);
       }
     }
-    return id;
+    return imgData;
   }
 
   // ===== Sharpen (convolution) =====
@@ -779,25 +774,6 @@
       ctx.moveTo(0, i); ctx.lineTo(N, i);
       ctx.stroke();
     }
-    ctx.restore();
-  }
-
-  // 天蓝色中轴线十字,帮助定位画布中心
-  function drawCrosshair(ctx, N) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(135,206,235,0.8)';
-    ctx.lineWidth = 1;
-    const mid = Math.floor(N / 2);
-    // 水平中线
-    ctx.beginPath();
-    ctx.moveTo(0, mid);
-    ctx.lineTo(N, mid);
-    ctx.stroke();
-    // 垂直中线
-    ctx.beginPath();
-    ctx.moveTo(mid, 0);
-    ctx.lineTo(mid, N);
-    ctx.stroke();
     ctx.restore();
   }
 
